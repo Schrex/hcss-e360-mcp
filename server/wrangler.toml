@@ -1,0 +1,31 @@
+# Cloudflare Workers FREE plan. Secrets are set with `wrangler secret put`, NEVER in this file.
+name = "schrex-hcss-e360-mcp"
+main = "src/worker.ts"
+compatibility_date = "2026-10-01"
+# Lets the OAuth library accept Client ID Metadata Document clients (it logs a notice without it). DCR works either way.
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = true
+
+[vars]
+# Read-only E360 scopes only. e360:timecards:read is needed for /api/v1/timeCards. Never add a :write scope.
+HCSS_SCOPE = "e360:read e360:timecards:read"
+ALLOWED_CIDRS = "160.79.104.0/21"     # applied to /mcp only (Anthropic egress)
+HCSS_PAGE_SIZE = "1000"               # E360 `count` max is 1000
+HCSS_MAX_SUBREQUESTS = "45"
+EXPORT_TTL_SECONDS = "900"
+PUBLIC_ORIGIN = "https://schrex-hcss-e360-mcp.schrex.workers.dev"   # canonical OAuth resource = PUBLIC_ORIGIN + /mcp
+
+# Placeholder ids. Create with `npx wrangler kv namespace create EXPORTS` / `... OAUTH_KV` and paste the ids below before deploy.
+[[kv_namespaces]]
+binding = "EXPORTS"
+id = "00000000000000000000000000000001"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"   # OAuth clients, grants, hashed tokens (@cloudflare/workers-oauth-provider) + login throttle counters
+id = "00000000000000000000000000000002"
+
+# Secrets (set once each, values never committed):
+#   HCSS_CLIENT_ID, HCSS_CLIENT_SECRET (same HCSS API client as HeavyJob)
+#   ALLOWED_USER_EMAIL     comma-separated, e.g. ryan@schrex.com
+#   ACCESS_PASSWORD_HASH   pbkdf2$30000$<salt>$<hash>
+#   TOKEN_EPOCH            any string; change it to revoke every token

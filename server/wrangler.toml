@@ -15,14 +15,14 @@ HCSS_MAX_SUBREQUESTS = "45"
 EXPORT_TTL_SECONDS = "900"
 PUBLIC_ORIGIN = "https://schrex-hcss-e360-mcp.schrex.workers.dev"   # canonical OAuth resource = PUBLIC_ORIGIN + /mcp
 
-# Placeholder ids. Create with `npx wrangler kv namespace create EXPORTS` / `... OAUTH_KV` and paste the ids below before deploy.
+# KV namespaces E360_EXPORTS and E360_OAUTH_KV (created 2026-11-04).
 [[kv_namespaces]]
 binding = "EXPORTS"
-id = "00000000000000000000000000000001"
+id = "2f3006bf25ca4eb9a1265cbf108a33c0"
 
 [[kv_namespaces]]
 binding = "OAUTH_KV"   # OAuth clients, grants, hashed tokens (@cloudflare/workers-oauth-provider) + login throttle counters
-id = "00000000000000000000000000000002"
+id = "51c6ea9437a64d469a772b3a3772c03a"
 
 # Secrets (set once each, values never committed):
 #   HCSS_CLIENT_ID, HCSS_CLIENT_SECRET (same HCSS API client as HeavyJob)

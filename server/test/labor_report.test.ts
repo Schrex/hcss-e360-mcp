@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildLaborReport } from "../src/labor_report.ts";
+import { buildLaborReport, centralDate } from "../src/labor_report.ts";
 
 // Equipment shaped like the E360 OpenAPI example for GET /api/v1/equipment.
 const dz101 = { id: "712b78b5-b10e-4df9-a6ee-1747754abb7b", equipmentId: 13, code: "DZ-101", description: "The big yellow one.", accountingCode: "HOLYMOLY", status: "Available", enabled: "Y" };
@@ -15,6 +15,8 @@ const row = (o: Record<string, unknown>) => ({
   workType: "Equipment", equipmentId: dz101.id, equipmentAccountingCode: "HOLYMOLY",
   damage: false, onSite: false, hours: 0, overtime: 0, doubleTime: 0, ...o,
 });
+/** A Unit line without its breakdowns. */
+const totals = ({ mechanics: _m, work_orders: _w, entries: _e, ...rest }: Record<string, unknown>) => rest;
 const opts = { start: "2026-10-26", end: "2026-11-01", today: "2026-11-04" };
 
 test("Unit Time is totalled per Unit with regular, overtime, double-time and total", () => {
@@ -22,7 +24,7 @@ test("Unit Time is totalled per Unit with regular, overtime, double-time and tot
     row({ hours: 6.5, overtime: 1, doubleTime: 0 }),
     row({ hours: 2, overtime: 0.5, doubleTime: 0.25, mechanicCode: "LUPIN,R" }),
   ], equipment, opts);
-  assert.deepEqual(r.units, [{ code: "DZ-101", description: "The big yellow one.", regular: 8.5, overtime: 1.5, double_time: 0.25, total: 10.25 }]);
+  assert.deepEqual(r.units.map(totals), [{ code: "DZ-101", description: "The big yellow one.", regular: 8.5, overtime: 1.5, double_time: 0.25, total: 10.25 }]);
 });
 
 test("Units sort by total desc, then natural code order; codes are trimmed", () => {
@@ -39,7 +41,7 @@ test("Units sort by total desc, then natural code order; codes are trimmed", () 
 
 test("hours are rounded to 2 dp after summing", () => {
   const r = buildLaborReport([row({ hours: 0.1 }), row({ hours: 0.2 }), row({ overtime: 1 / 3 })], equipment, opts);
-  assert.deepEqual(r.units[0], { code: "DZ-101", description: "The big yellow one.", regular: 0.3, overtime: 0.33, double_time: 0, total: 0.63 });
+  assert.deepEqual(totals(r.units[0]), { code: "DZ-101", description: "The big yellow one.", regular: 0.3, overtime: 0.33, double_time: 0, total: 0.63 });
 });
 
 test("Shop Time and Job Time are separate lines; grand total matches all Counted Time", () => {
@@ -128,4 +130,74 @@ test("ranges over 92 days are refused with a pointer to the export; 92 days is a
 test("scope is partial when the pull was capped", () => {
   assert.equal(buildLaborReport([], [], opts).scope, "full");
   assert.equal(buildLaborReport([], [], { ...opts, partial: true }).scope, "partial");
+});
+
+test("each Unit is broken down by mechanic code and by work order, most hours first", () => {
+  const r = buildLaborReport([
+    row({ hours: 2, mechanicCode: "SMITH,J", workOrderNumber: 1042 }),
+    row({ hours: 1, overtime: 1, mechanicCode: "LUPIN,R", workOrderNumber: 1043 }),
+    row({ hours: 3, mechanicCode: " lupin,r ", workOrderNumber: 1043 }),
+    row({ hours: 0.5, mechanicCode: "SMITH,J", workOrderNumber: null }),
+  ], equipment, opts);
+  assert.deepEqual(r.units[0].mechanics, [
+    { mechanic_code: "LUPIN,R", regular: 4, overtime: 1, double_time: 0, total: 5 },
+    { mechanic_code: "SMITH,J", regular: 2.5, overtime: 0, double_time: 0, total: 2.5 },
+  ]);
+  assert.deepEqual(r.units[0].work_orders, [
+    { work_order: "1043", regular: 4, overtime: 1, double_time: 0, total: 5 },
+    { work_order: "1042", regular: 2, overtime: 0, double_time: 0, total: 2 },
+    { work_order: "(none)", regular: 0.5, overtime: 0, double_time: 0, total: 0.5 },
+  ]);
+  assert.equal(r.units[0].entries, undefined);
+});
+
+test("mechanic filter (trimmed, case-insensitive) limits every line to that mechanic code", () => {
+  const r = buildLaborReport([
+    row({ hours: 2, mechanicCode: "SMITH,J" }),
+    row({ hours: 3, mechanicCode: "LUPIN,R" }),
+    row({ equipmentId: dz102.id, hours: 4, mechanicCode: "LUPIN,R" }),
+    row({ workType: "Shop", equipmentId: null, hours: 1, mechanicCode: "SMITH,J" }),
+    row({ workType: "Shop", equipmentId: null, hours: 8, mechanicCode: "LUPIN,R" }),
+  ], equipment, { ...opts, mechanic: " smith,j " });
+  assert.deepEqual(r.units.map((u) => [u.code, u.total]), [["DZ-101", 2]]);
+  assert.deepEqual(r.units[0].mechanics.map((m) => m.mechanic_code), ["SMITH,J"]);
+  assert.equal(r.shop_time.total, 1);
+  assert.equal(r.grand_total.total, 3);
+  assert.equal(r.mechanic, "smith,j");
+});
+
+test("equipment filter (trimmed, case-insensitive) returns only that Unit, with its daily entries in date order", () => {
+  const r = buildLaborReport([
+    row({ equipmentId: dz102.id, timeCardDate: "2026-10-28T00:00:00", hours: 3, mechanicCode: "LUPIN,R", workOrderNumber: 1043, status: "Entered" }),
+    row({ equipmentId: dz102.id, timeCardDate: "2026-10-27T00:00:00", hours: 1, overtime: 0.5, mechanicCode: "SMITH,J", workOrderNumber: 0 }),
+    row({ equipmentId: dz102.id, timeCardDate: "2026-10-27T00:00:00", hours: 9, status: "Rejected" }),
+    row({ equipmentId: dz101.id, hours: 5 }),
+    row({ workType: "Shop", equipmentId: null, hours: 2 }),
+  ], equipment, { ...opts, equipment: " dz-102" });
+  assert.equal(r.equipment, "DZ-102");
+  assert.deepEqual(r.units.map((u) => [u.code, u.total]), [["DZ-102", 4.5]]);
+  assert.deepEqual(r.units[0].entries, [
+    { date: "2026-10-27", mechanic_code: "SMITH,J", work_order: "(none)", status: "Approved", regular: 1, overtime: 0.5, double_time: 0, total: 1.5 },
+    { date: "2026-10-28", mechanic_code: "LUPIN,R", work_order: "1043", status: "Entered", regular: 3, overtime: 0, double_time: 0, total: 3 },
+  ]);
+  // Shop/Job Time is not Unit Time, so a one-Unit report leaves them out of every total.
+  assert.equal(r.shop_time.total, 0);
+  assert.equal(r.grand_total.total, 4.5);
+});
+
+test("unknown equipment code is an error listing close matches (within 2 edits ignoring case/punctuation, or containing it), closest first", () => {
+  const e = (id: string, code: string) => ({ id, equipmentId: 1, code, description: "" });
+  const eq = [dz101, dz102, e("a0000000-0000-0000-0000-000000000305", "305"), e("a0000000-0000-0000-0000-000000003051", "305-OLD-TRUCK"), e("a0000000-0000-0000-0000-000000000999", "LOADER-9")];
+  const msg = (code: string) => { try { buildLaborReport([], eq, { ...opts, equipment: code }); return "no error"; } catch (err) { return (err as Error).message; } };
+  assert.equal(msg("XZ-102"), 'No equipment with code "XZ-102". Close matches: DZ-102, DZ-101.');
+  assert.equal(msg("dz101"), 'No equipment with code "dz101". Close matches: DZ-101, DZ-102.');
+  assert.equal(msg(" 305a "), 'No equipment with code "305a". Close matches: 305.');
+  assert.equal(msg("old truck"), 'No equipment with code "old truck". Close matches: 305-OLD-TRUCK.');
+  assert.equal(msg("EXCAVATOR"), 'No equipment with code "EXCAVATOR". No close matches.');
+});
+
+test("today is the US Central date, so Sunday evening still reports the week before", () => {
+  assert.equal(centralDate(new Date("2026-11-02T03:30:00Z")), "2026-11-01"); // Sun 9:30pm CST
+  assert.equal(centralDate(new Date("2026-07-06T04:59:00Z")), "2026-07-05"); // Sun 11:59pm CDT
+  assert.equal(centralDate(new Date("2026-07-06T05:00:00Z")), "2026-07-06"); // Mon 00:00 CDT
 });

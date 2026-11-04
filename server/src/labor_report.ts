@@ -14,6 +14,8 @@ export type MechanicRow = { mechanic_code: string } & Hours;
 export type WorkOrderRow = { work_order: string } & Hours;
 /** One time card detail line on a Unit. */
 export type EntryRow = { date: string; mechanic_code: string; work_order: string; status: string } & Hours;
+/** One Counted Time entry for the xlsx detail sheet; `unit` is blank for Shop/Job Time. */
+export type DetailRow = { date: string; unit: string; mechanic_code: string; work_order: string; work_type: string; status: string } & Hours;
 /** One Unit's line, broken down by mechanic code and by work order; `entries` only when one Unit was requested. */
 export type UnitRow = { code: string; description: string } & Hours & {
   mechanics: MechanicRow[];
@@ -33,6 +35,8 @@ export type LaborReport = {
   shop_time: Hours;
   job_time: Hours;
   grand_total: Hours;
+  /** Every Counted Time entry, when `detail` was asked for. */
+  detail?: DetailRow[];
 };
 
 export type ReportOptions = {
@@ -45,8 +49,12 @@ export type ReportOptions = {
   equipment?: string;
   /** Only this mechanic code (trimmed, case-insensitive), on every line including Shop/Job Time. */
   mechanic?: string;
+  /** Set when the equipment pull was capped: an unknown `equipment` code is then reported as unresolvable, not missing. */
+  equipment_incomplete?: boolean;
   /** Set when the time card pull was capped (row limit / subrequest budget). */
   partial?: boolean;
+  /** Also return every Counted Time entry (all Units, Shop and Job) as `detail`. */
+  detail?: boolean;
   /** Longest allowed range in days; default MAX_CHAT_DAYS. */
   maxDays?: number;
 };
@@ -119,11 +127,14 @@ function counted(row: Rec, approvedOnly: boolean): boolean {
 }
 
 /** Finds the Unit by equipment code (trimmed, case-insensitive). Every record with that code counts (e.g. a deleted duplicate). */
-function resolveUnit(code: string, equipment: Rec[]): { code: string; ids: Set<string> } {
+function resolveUnit(code: string, equipment: Rec[], incomplete: boolean): { code: string; ids: Set<string> } {
   const ids = new Set<string>();
   let found = "";
   for (const e of equipment) {
     if (typeof e.id === "string" && codeEq(e.code, code)) { ids.add(lower(e.id)); found ||= normCode(e.code); }
+  }
+  if (!ids.size && incomplete) {
+    throw new Error(`Equipment code "${normCode(code)}" was not found, but the equipment list was incomplete (an HCSS limit was hit), so it may still exist. Try again, or narrow the request.`);
   }
   if (!ids.size) {
     const near = closeMatches(code, equipment.map((e) => normCode(e.code)).filter(Boolean));
@@ -167,11 +178,17 @@ export function buildLaborReport(rows: Rec[], equipment: Rec[], o: ReportOptions
   const mechanic = normCode(o.mechanic) || undefined;
   const byId = new Map<string, Rec>();
   for (const e of equipment) if (typeof e.id === "string") byId.set(lower(e.id), e);
-  const unit = normCode(o.equipment) ? resolveUnit(o.equipment!, equipment) : undefined;
+  const unit = normCode(o.equipment) ? resolveUnit(o.equipment!, equipment, o.equipment_incomplete ?? false) : undefined;
 
   type Unit = { code: string; description: string; h: Acc; mech: Map<string, { code: string; h: Acc }>; wo: Map<string, Acc>; entries: EntryRow[] };
   const units = new Map<string, Unit>();
   const shop = acc(), job = acc(), all = acc();
+  const detail: DetailRow[] = [];
+  const entry = (row: Rec, day: string, unitCode: string): DetailRow => {
+    const h = acc();
+    add(h, row);
+    return { date: day, unit: unitCode, mechanic_code: normCode(row.mechanicCode), work_order: workOrder(row), work_type: normCode(row.workType), status: normCode(row.status), ...out(h) };
+  };
   for (const row of rows) {
     const day = String(row.timeCardDate ?? "").slice(0, 10);
     if (day < start || day > end) continue;
@@ -181,8 +198,11 @@ export function buildLaborReport(rows: Rec[], equipment: Rec[], o: ReportOptions
     const eqId = lower(row.equipmentId);
     if (unit && (type === "shop" || type === "job" || !unit.ids.has(eqId))) continue;
     add(all, row);
-    if (type === "shop") { add(shop, row); continue; }
-    if (type === "job") { add(job, row); continue; }
+    if (type === "shop" || type === "job") {
+      add(type === "shop" ? shop : job, row);
+      if (o.detail) detail.push(entry(row, day, ""));
+      continue;
+    }
     // Equipment (or an unrecognised work type): Unit Time, joined on time card equipmentId (uuid) = equipment id (uuid).
     const eq = eqId ? byId.get(eqId) : undefined;
     const key = eq ? "eq:" + eqId : eqId ? "unknown:" + eqId : "none";
@@ -205,10 +225,10 @@ export function buildLaborReport(rows: Rec[], equipment: Rec[], o: ReportOptions
     let w = u.wo.get(wk);
     if (!w) u.wo.set(wk, (w = acc()));
     add(w, row);
-    if (unit) {
-      const h = acc();
-      add(h, row);
-      u.entries.push({ date: day, mechanic_code: normCode(row.mechanicCode), work_order: wk, status: normCode(row.status), ...out(h) });
+    if (unit || o.detail) {
+      const e = entry(row, day, u.code);
+      if (o.detail) detail.push(e);
+      if (unit) u.entries.push({ date: e.date, mechanic_code: e.mechanic_code, work_order: e.work_order, status: e.status, regular: e.regular, overtime: e.overtime, double_time: e.double_time, total: e.total });
     }
   }
 
@@ -230,5 +250,8 @@ export function buildLaborReport(rows: Rec[], equipment: Rec[], o: ReportOptions
     ...(unit && { equipment: unit.code }),
     ...(mechanic !== undefined && { mechanic }),
     units: unitRows, shop_time: out(shop), job_time: out(job), grand_total: out(all),
+    ...(o.detail && {
+      detail: detail.sort((a, b) => a.date.localeCompare(b.date) || codeCompare(a.unit, b.unit) || codeCompare(a.work_type, b.work_type) || codeCompare(a.mechanic_code, b.mechanic_code) || codeCompare(a.work_order, b.work_order)),
+    }),
   };
 }

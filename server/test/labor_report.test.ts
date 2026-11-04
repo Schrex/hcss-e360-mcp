@@ -201,3 +201,33 @@ test("today is the US Central date, so Sunday evening still reports the week bef
   assert.equal(centralDate(new Date("2026-07-06T04:59:00Z")), "2026-07-05"); // Sun 11:59pm CDT
   assert.equal(centralDate(new Date("2026-07-06T05:00:00Z")), "2026-07-06"); // Mon 00:00 CDT
 });
+
+test("detail lists one row per Counted Time entry across all Units, Shop and Job, in date then Unit order", () => {
+  const r = buildLaborReport([
+    row({ equipmentId: dz102.id, timeCardDate: "2026-10-28T00:00:00", hours: 3, mechanicCode: "LUPIN,R", workOrderNumber: 1043, status: "Entered" }),
+    row({ equipmentId: dz101.id, timeCardDate: "2026-10-28T00:00:00", hours: 1, overtime: 0.5 }),
+    row({ workType: "Shop", equipmentId: null, timeCardDate: "2026-10-27T00:00:00", workOrderNumber: 0, hours: 2 }),
+    row({ equipmentId: dz101.id, hours: 9, status: "Rejected" }),
+    row({ equipmentId: dz101.id, timeCardDate: "2026-11-02T00:00:00", hours: 9 }),
+  ], equipment, { ...opts, detail: true });
+  assert.deepEqual(r.detail, [
+    { date: "2026-10-27", unit: "", mechanic_code: "SMITH,J", work_order: "(none)", work_type: "Shop", status: "Approved", regular: 2, overtime: 0, double_time: 0, total: 2 },
+    { date: "2026-10-28", unit: "DZ-101", mechanic_code: "SMITH,J", work_order: "1042", work_type: "Equipment", status: "Approved", regular: 1, overtime: 0.5, double_time: 0, total: 1.5 },
+    { date: "2026-10-28", unit: "DZ-102", mechanic_code: "LUPIN,R", work_order: "1043", work_type: "Equipment", status: "Entered", regular: 3, overtime: 0, double_time: 0, total: 3 },
+  ]);
+  assert.equal(buildLaborReport([], equipment, opts).detail, undefined);
+});
+
+test("unknown equipment code with an incomplete equipment list says the list was incomplete, not that the Unit doesn't exist", () => {
+  assert.throws(() => buildLaborReport([], equipment, { ...opts, equipment: "305", equipment_incomplete: true }),
+    (err: Error) => /equipment list was incomplete/.test(err.message) && !/No equipment with code/.test(err.message));
+  // A code that is in the partial list still works.
+  const r = buildLaborReport([row({ hours: 1 })], equipment, { ...opts, equipment: "DZ-101", equipment_incomplete: true });
+  assert.equal(r.units[0].total, 1);
+});
+
+test("ranges are unlimited when maxDays is Infinity (export), but dates stay strict", () => {
+  const r = buildLaborReport([], [], { start: "2025-01-01", end: "2026-10-31", today: "2026-11-04", maxDays: Infinity });
+  assert.deepEqual([r.start, r.end], ["2025-01-01", "2026-10-31"]);
+  assert.throws(() => buildLaborReport([], [], { start: "2025-1-01", end: "2026-10-31", today: "2026-11-04", maxDays: Infinity }), /Invalid start/);
+});

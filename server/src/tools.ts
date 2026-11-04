@@ -1,35 +1,40 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import type { Config, Env } from "./config.js";
 import type { HcssClient } from "./hcss.js";
-import { defaultBusinessUnit, realUnits } from "./business_units.js";
+import { buildLaborReport, resolveRange } from "./labor_report.js";
 
 type Rec = Record<string, unknown>;
-let autoBu: string | undefined; // isolate-scoped; only set when exactly one real unit exists
+const MAX_ROWS = 20_000; // per pull; beyond this the report is marked partial
 
-export function buildServer(cfg: Config, hcss: HcssClient, _env: Env, _origin: string): McpServer {
+export function buildServer(_cfg: Config, hcss: HcssClient, _env: Env, _origin: string): McpServer {
   const server = new McpServer({ name: "schrex-hcss-e360", version: "0.1.0" });
+  const reply = (payload: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(payload) }] });
+  const fail = (e: unknown) => ({ isError: true, content: [{ type: "text" as const, text: (e as Error).message }] });
 
-  const reply = (payload: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] });
-  const pick = (r: Rec, keys: string[]) => { const o: Rec = {}; for (const k of keys) if (r[k] !== undefined && r[k] !== null && r[k] !== "") o[k] = r[k]; return o; };
-
-  // GET /api/v1/businessUnits: plain array (not paged), cached 5 min by the client.
-  const listUnits = async () => (await hcss.get<Rec[]>("/api/v1/businessUnits")) ?? [];
-  /** Business unit for equipment lookups: argument, then HCSS_BUSINESS_UNIT_ID, then the only real unit. */
-  const bu = async (id?: string): Promise<string> => {
-    const v = id ?? cfg.businessUnitId ?? autoBu;
-    if (v) return v;
-    return (autoBu = defaultBusinessUnit(await listUnits()));
-  };
-
-  // TEMPORARY: verifies the full path (Claude sign-in -> HCSS token -> E360). Remove once the labor tools land.
-  server.tool("list_business_units", "List E360 business units. default_candidate marks real units (placeholder all-zero ids are ignored; duplicates by code collapsed). selected is the unit used by default, if any.", {}, async () => {
-    const rows = await listUnits();
-    const real = new Set(realUnits(rows));
-    let selected: string | undefined, selection_error: string | undefined;
-    try { selected = await bu(); } catch (e) { selection_error = (e as Error).message; }
-    return reply({ count: rows.length, distinct_real_units: real.size, selected, selection_error,
-      data: rows.map((u) => ({ ...pick(u, ["id", "code", "description"]), default_candidate: real.has(u) })) });
-  });
+  const date = z.string().describe("YYYY-MM-DD").optional();
+  server.tool(
+    "get_equipment_labor_hours",
+    "Mechanic Time per Unit from E360 time cards for a date range: each Unit's regular, overtime, double-time and total hours (most hours first), " +
+      "with Shop Time and Job Time as separate lines and grand totals. Excludes rejected cards and voided entries; approved_only keeps approved + exported cards. " +
+      "No dates = last full Mon-Sun week; only start = through today; only end = the 7 days ending on end. Max 92 days. scope 'partial' means a limit was hit and totals are incomplete.",
+    { start: date, end: date, approved_only: z.boolean().optional() },
+    async ({ start, end, approved_only }) => {
+      try {
+        // Today in UTC (Schreiber's timezone not configured); only shifts the default week near midnight Sunday/Monday.
+        const today = new Date().toISOString().slice(0, 10);
+        const range = resolveRange({ start, end, today }); // validate before spending any HCSS calls
+        const cards = await hcss.pageAll<Rec>("/api/v1/timeCards", { beginDate: range.start, endDate: `${range.end}T23:59:59` }, MAX_ROWS);
+        // No business unit filter: v1 time cards are company-wide, so the lookup needs every Unit (deleted ones too) for the join.
+        const equipment = await hcss.pageAll<Rec>("/api/v1/equipment", { includeDeleted: true }, MAX_ROWS);
+        return reply(buildLaborReport(cards.records, equipment.records, {
+          ...range, today, approved_only, partial: cards.partial || equipment.partial,
+        }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
 
   return server;
 }

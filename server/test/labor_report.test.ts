@@ -231,3 +231,25 @@ test("ranges are unlimited when maxDays is Infinity (export), but dates stay str
   assert.deepEqual([r.start, r.end], ["2025-01-01", "2026-10-31"]);
   assert.throws(() => buildLaborReport([], [], { start: "2025-1-01", end: "2026-10-31", today: "2026-11-04", maxDays: Infinity }), /Invalid start/);
 });
+
+test("work type is matched ignoring case, spaces and punctuation; other work types go on a labelled Other Time line in the grand total", () => {
+  const r = buildLaborReport([
+    row({ workType: " equipment ", hours: 1 }),
+    row({ workType: "SHOP", equipmentId: null, hours: 2 }),
+    row({ workType: "Job.", equipmentId: null, hours: 4 }),
+    row({ workType: "Travel", equipmentId: dz101.id, hours: 8 }),
+    row({ workType: "PM Service", equipmentId: null, hours: 16, overtime: 1 }),
+    row({ workType: "travel", equipmentId: null, hours: 0.5 }),
+  ], equipment, opts);
+  assert.deepEqual(r.units.map((u) => [u.code, u.total]), [["DZ-101", 1]]);
+  assert.equal(r.shop_time.total, 2);
+  assert.equal(r.job_time.total, 4);
+  assert.deepEqual(r.other_time, { work_types: ["PM Service", "Travel"], regular: 24.5, overtime: 1, double_time: 0, total: 25.5 });
+  assert.equal(r.grand_total.total, 32.5);
+});
+
+test("a one-Unit report leaves Other Time out, like Shop and Job Time", () => {
+  const r = buildLaborReport([row({ hours: 1 }), row({ workType: "Travel", hours: 8 })], equipment, { ...opts, equipment: "DZ-101" });
+  assert.deepEqual(r.other_time, { work_types: [], regular: 0, overtime: 0, double_time: 0, total: 0 });
+  assert.equal(r.grand_total.total, 1);
+});

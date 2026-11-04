@@ -5,7 +5,6 @@ export interface Env {
   ALLOWED_USER_EMAIL: string;        // comma-separated allowlist
   ACCESS_PASSWORD_HASH: string;      // pbkdf2$<iter>$<salt_b64>$<hash_b64>
   TOKEN_EPOCH: string;               // rotate to revoke every issued token
-  HCSS_BUSINESS_UNIT_ID?: string;
   // vars (wrangler.toml)
   HCSS_SCOPE?: string;
   HCSS_TOKEN_URL?: string;
@@ -26,7 +25,6 @@ export interface Config {
   scope: string;
   tokenUrl: string;
   apiBase: string;
-  businessUnitId?: string;
   pageSize: number;
   maxSubrequests: number;
   allowedCidrs: string[];
@@ -46,7 +44,6 @@ export function loadConfig(env: Env): Config {
     tokenUrl: env.HCSS_TOKEN_URL || "https://api.hcssapps.com/identity/connect/token",
     // E360 OpenAPI "servers": https://api.hcssapps.com/e360 ; paths start with /api/v1
     apiBase: (env.HCSS_API_BASE || "https://api.hcssapps.com/e360").replace(/\/$/, ""),
-    businessUnitId: env.HCSS_BUSINESS_UNIT_ID || undefined,
     pageSize: Math.min(1000, Math.max(1, num(env.HCSS_PAGE_SIZE, 1000))),
     maxSubrequests: Math.min(48, num(env.HCSS_MAX_SUBREQUESTS, 45)),
     allowedCidrs: (env.ALLOWED_CIDRS ?? "160.79.104.0/21").split(",").map((s) => s.trim()).filter(Boolean),

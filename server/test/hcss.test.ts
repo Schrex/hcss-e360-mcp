@@ -112,6 +112,21 @@ test("pageAll stops on a repeated cursor", async () => {
   assert.equal(got.records.length, 2);
 });
 
+test("equipment and business units are cached for the isolate; time cards are always fetched fresh", async () => {
+  const hcss = new HcssClient(cfg);
+  const apiCalls = () => calls.filter((c) => !c.url.endsWith("/token")).length;
+  for (const path of ["/api/v1/equipment", "/api/v1/businessUnits"]) {
+    const before = apiCalls();
+    await hcss.get(path);
+    await new HcssClient(cfg).get(path);
+    assert.equal(apiCalls() - before, 1, path);
+  }
+  const before = apiCalls();
+  await hcss.get("/api/v1/timeCards", { beginDate: "2026-10-26" });
+  await new HcssClient(cfg).get("/api/v1/timeCards", { beginDate: "2026-10-26" });
+  assert.equal(apiCalls() - before, 2);
+});
+
 test("pageAll returns what it has as partial when the subrequest budget runs out", async () => {
   route = pagedRoute;
   const got = await new HcssClient({ ...cfg, maxSubrequests: 3 }).pageAll<{ code: string }>("/api/v1/equipment", {}, 100);

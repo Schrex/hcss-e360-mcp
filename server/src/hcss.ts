@@ -9,6 +9,8 @@ type TokenEntry = { token: string; exp: number; granted?: string };
 const tokenCache = new Map<string, TokenEntry>();
 const cache = new Map<string, { at: number; value: unknown }>();
 const CACHE_TTL_MS = 5 * 60_000;
+/** Only lookups that change rarely are cached; time cards are always fetched fresh so repeat queries see current hours. */
+const isCacheable = (path: string) => /^\/api\/v1\/(equipment|businessUnits)(\/|$)/.test(path);
 
 /** Clears the isolate caches (tests only). */
 export function resetHcssCaches() { tokenCache.clear(); cache.clear(); }
@@ -122,7 +124,8 @@ export class HcssClient {
     const url = new URL(this.cfg.apiBase + path);
     for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, String(v));
     const key = `GET ${url}`;
-    const hit = cache.get(key);
+    const cacheable = isCacheable(path);
+    const hit = cacheable ? cache.get(key) : undefined;
     if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value as T;
 
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -143,8 +146,10 @@ export class HcssClient {
         throw new Error(`HCSS GET ${url.pathname} failed: HTTP ${res.status}${text ? ` - ${text}` : ""}`);
       }
       const value = await readJson<T>(res, `GET ${url.pathname}`);
-      cache.set(key, { at: Date.now(), value });
-      if (cache.size > 50) cache.delete(cache.keys().next().value as string);
+      if (cacheable) {
+        cache.set(key, { at: Date.now(), value });
+        if (cache.size > 50) cache.delete(cache.keys().next().value as string);
+      }
       return value;
     }
     throw new Error(`HCSS GET ${url.pathname}: gave up after repeated 429/5xx (HCSS limit is 100/min per company, shared with the nightly sync and other connectors).`);

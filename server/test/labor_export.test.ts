@@ -60,3 +60,10 @@ test("Notes sheet records range and filters", () => {
   assert.equal(notes["Statuses"], "Approved and exported only");
   assert.equal(notes["Scope"], "full");
 });
+
+test("Other Time appears on the Summary sheet, naming its work types, when there is any", () => {
+  const x = laborExport(buildLaborReport([...rows, row({ workType: "Travel", equipmentId: null, hours: 2 })], [dz101, dz102], opts));
+  const summary = sheet(x, "Summary");
+  assert.deepEqual(summary.at(-2), ["Other Time (Travel)", "", 2, 0, 0, 2]);
+  assert.deepEqual(summary.at(-1), ["Grand total", "", 14.5, 1, 0.5, 16]);
+});

@@ -4,23 +4,26 @@ import type { Sheet } from "./xlsx.js";
 /** Sheet layout for the Mechanic Time per Unit xlsx. Pure: the caller zips (toXlsx) and stores it. */
 export type LaborExport = { filename: string; partial: boolean; sheets: Sheet[] };
 
-const PARTIAL = "PARTIAL: an HCSS limit was hit (row cap or request budget); totals are incomplete. Export a shorter range for complete figures.";
-const h = (x: Hours) => [x.regular, x.overtime, x.double_time, x.total];
+/** Warning for a capped pull, used in the xlsx and the tool response. */
+export const PARTIAL = "PARTIAL: an HCSS limit was hit (row cap or request budget); totals are incomplete. Export a shorter range for complete figures.";
+const hourCells = (hours: Hours) => [hours.regular, hours.overtime, hours.double_time, hours.total];
 
 /** `report` must be built with `detail: true`. */
 export function laborExport(report: LaborReport, generatedAt = new Date()): LaborExport {
   const partial = report.scope === "partial";
   const tail = partial ? [[PARTIAL]] : [];
+  const other = report.other_time;
   const summary = [
     ["Unit", "Description", "Regular", "Overtime", "Double time", "Total"],
-    ...report.units.map((u) => [u.code, u.description, ...h(u)]),
-    ...(report.equipment ? [] : [["Shop Time", "", ...h(report.shop_time)], ["Job Time", "", ...h(report.job_time)]]),
-    ["Grand total", "", ...h(report.grand_total)],
+    ...report.units.map((unit) => [unit.code, unit.description, ...hourCells(unit)]),
+    ...(report.equipment ? [] : [["Shop Time", "", ...hourCells(report.shop_time)], ["Job Time", "", ...hourCells(report.job_time)]]),
+    ...(other.work_types.length ? [[`Other Time (${other.work_types.join(", ")})`, "", ...hourCells(other)]] : []),
+    ["Grand total", "", ...hourCells(report.grand_total)],
     ...tail,
   ];
   const detail = [
     ["Date", "Unit", "Mechanic code", "Work order", "Work type", "Regular", "Overtime", "Double time", "Total", "Status"],
-    ...(report.detail ?? []).map((d) => [d.date, d.unit, d.mechanic_code, d.work_order, d.work_type, ...h(d), d.status]),
+    ...(report.detail ?? []).map((row) => [row.date, row.unit, row.mechanic_code, row.work_order, row.work_type, ...hourCells(row), row.status]),
     ...tail,
   ];
   const notes = [

@@ -25,7 +25,7 @@ binding = "OAUTH_KV"   # OAuth clients, grants, hashed tokens (@cloudflare/worke
 id = "00000000000000000000000000000002"
 
 # Secrets (set once each, values never committed):
-#   HCSS_CLIENT_ID, HCSS_CLIENT_SECRET (same HCSS API client as HeavyJob), HCSS_BUSINESS_UNIT_ID (optional)
+#   HCSS_CLIENT_ID, HCSS_CLIENT_SECRET (same HCSS API client as HeavyJob)
 #   ALLOWED_USER_EMAIL     comma-separated, e.g. ryan@schrex.com
 #   ACCESS_PASSWORD_HASH   pbkdf2$30000$<salt>$<hash>
 #   TOKEN_EPOCH            any string; change it to revoke every token
